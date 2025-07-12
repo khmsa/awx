@@ -1,0 +1,152 @@
+- name: Déployer VMs Rocky Linux et pfSense sur ESXi (sans vCenter)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  collections:
+    - community.vmware
+
+  vars:
+    # Informations de connexion à l'hôte ESXi
+    esxi_hostname: "147.79.5.200"        # Adresse IP ou FQDN de votre ESXi
+    esxi_username: "ansible"   # À renseigner
+    esxi_password: "$S8DXZPq!hPUZH#n"    # À renseigner
+    validate_certs: false
+
+    # Informations sur l'infrastructure ESXi
+    datastore: "dstore-vms"               # Nom du datastore (les VMs seront créées à la racine)
+    
+    # Nom des vSwitch et portgroups
+    default_vswitch: "vSwitch0"           # vSwitch existant (pour le WAN – supposé déjà configuré)
+    wan_pg: "VM Network"                  # Portgroup WAN (sur vSwitch0), déjà existant
+    new_vswitch: "vswitch_LAN_STK"        # Nouveau vSwitch à créer pour le LAN
+    lan_pg: "LAN STK NET"                 # Portgroup LAN à créer sur le nouveau vSwitch
+
+    # Chemins ISO (au format "[datastore] chemin")
+    rocky_iso: "[dstore-vms] ISO/Rocky-9.5-x86_64-minimal.iso"
+    pfsense_iso: "[dstore-vms] ISO/pfSense-CE-2.7.2-RELEASE-amd64.iso"
+
+    # Définition des VMs Rocky Linux
+    rocky_vms:
+      - name: "CEPH-1"
+        num_cpus: 4
+        memory_mb: 4096
+      - name: "CEPH-2"
+        num_cpus: 4
+        memory_mb: 4096
+      - name: "CEPH-3"
+        num_cpus: 4
+        memory_mb: 4096
+    rocky_os_disk_size: 20              # Disque OS en Go
+    rocky_data_disk_size: 120           # Disque de données en Go
+
+    # Définition de la VM pfSense
+    pfsense_vm:
+      name: "PFSE_STK"
+      num_cpus: 4
+      memory_mb: 2048
+    pfsense_disk_size: 12               # Disque de 12 Go
+
+    # Configuration réseau
+    # Rocky Linux : attachées au portgroup LAN (sur le nouveau vSwitch)
+    rocky_network:
+      - name: "{{ lan_pg }}"
+    pfsense_networks:
+      - name: "{{ wan_pg }}"   # Interface WAN (portgroup VM Network existant)
+      - name: "{{ lan_pg }}"   # Interface LAN (portgroup LAN STK NET)
+
+  tasks:
+    - name: Créer le vSwitch vswitch_LAN_STK avec sécurité activée sur l'hôte ESXi
+      vmware_vswitch:
+        hostname: "{{ esxi_hostname }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ validate_certs }}"
+        switch: "{{ new_vswitch }}"
+        state: present
+        number_of_ports: 128
+        mtu: 1500
+        security:
+          promiscuous_mode: true
+          forged_transmits: true
+          mac_changes: true
+      delegate_to: localhost
+
+    - name: Créer le portgroup LAN STK NET sur le vSwitch vswitch_LAN_STK
+      vmware_portgroup:
+        hostname: "{{ esxi_hostname }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ validate_certs }}"
+        switch: "{{ new_vswitch }}"
+        portgroup: "{{ lan_pg }}"
+        vlan_id: 0
+        state: present
+        hosts: [ "{{ esxi_hostname }}" ]
+      delegate_to: localhost
+
+    - name: Vérifier/créer le portgroup VM Network sur l'hôte ESXi
+      vmware_portgroup:
+        hostname: "{{ esxi_hostname }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ validate_certs }}" 
+        switch: "{{ default_vswitch }}"
+        portgroup: "{{ wan_pg }}"
+        vlan_id: 0
+        state: present   
+        hosts: [ "{{ esxi_hostname }}" ]
+      delegate_to: localhost
+
+    - name: Déployer les VMs Rocky Linux depuis l'ISO (à la racine)
+      vmware_guest:
+        hostname: "{{ esxi_hostname }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datastore: "{{ datastore }}"
+        folder: "/"                       # Déploiement à la racine
+        name: "{{ item.name }}"
+        state: poweredon
+        guest_id: "rhel8_64Guest"         # Rocky Linux (compatible RHEL8)
+        hardware:
+          num_cpus: "{{ item.num_cpus }}"
+          memory_mb: "{{ item.memory_mb }}"
+        disk:
+          - size_gb: "{{ rocky_os_disk_size }}"
+            type: thin
+            datastore: "{{ datastore }}"
+          - size_gb: "{{ rocky_data_disk_size }}"
+            type: thin
+            datastore: "{{ datastore }}"
+        cdrom:
+          - type: iso
+            iso_path: "{{ rocky_iso }}"
+        networks: "{{ rocky_network }}"
+      loop: "{{ rocky_vms }}"
+
+    - name: Déployer la VM pfSense depuis l'ISO avec 2 interfaces
+      vmware_guest:
+        hostname: "{{ esxi_hostname }}"
+        username: "{{ esxi_username }}"
+        password: "{{ esxi_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datastore: "{{ datastore }}"
+        folder: "/"                       # Déploiement à la racine
+        name: "{{ pfsense_vm.name }}"
+        state: poweredon
+        guest_id: "freebsd64Guest"         # pfSense (basé sur FreeBSD)
+        hardware:
+          num_cpus: "{{ pfsense_vm.num_cpus }}"
+          memory_mb: "{{ pfsense_vm.memory_mb }}"
+        disk:
+          - size_gb: "{{ pfsense_disk_size }}"
+            type: thin
+            datastore: "{{ datastore }}"
+        cdrom:
+        - controller_type: 'ide'
+          controller_number: 0
+          unit_number: 0
+          type: iso
+          iso_path: "{{ pfsense_iso }}"
+        networks: "{{ pfsense_networks }}"
+      delegate_to: localhost
