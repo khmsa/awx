@@ -1,0 +1,128 @@
+---
+- name: Déployer 5 pfSense sur ESXi avec portgroups VLAN
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    # ESXi
+    validate_certs: false
+
+    datastore: "dstore-vms"
+    default_vswitch: "vSwitch0"
+
+    # ISO pfSense
+    pfsense_iso: "[dstore-vms] ISO/pfSense-CE-2.7.2-RELEASE-amd64.iso"
+
+    # portgroup déjà existant pour WAN
+    wan_pg: "VMNetwork"
+    # portgroup pour STK
+    lan_pg: "LAN STK NET"
+
+    # portgroups CLI/CLO sites S1 et S2 (déjà créés)
+    portgroups:
+      - name: "{{ lan_pg }}"
+        vlan_id: 0
+      - name: "LAN_S1"
+        vlan_id: 0
+      - name: "SRV_S1"
+        vlan_id: 0
+      - name: "VSAN_S1"
+        vlan_id: 0
+      - name: "CARP_S1"
+        vlan_id: 0
+      - name: "VPN_S1"
+        vlan_id: 20
+      - name: "LAN_S2"
+        vlan_id: 0
+      - name: "SRV_S2"
+        vlan_id: 0
+      - name: "VSAN_S2"
+        vlan_id: 0
+      - name: "CARP_S2"
+        vlan_id: 0
+      - name: "VPN_S2"
+        vlan_id: 20
+
+    # définition des 5 VMs pfSense
+    pf_vms:
+      - name: "PFSECLI_1"
+        networks:
+          - name: "{{ wan_pg }}"
+          - name: "LAN_S1"
+          - name: "SRV_S1"
+          - name: "VSAN_S1"
+          - name: "CARP_S1"
+          - name: "VPN_S1"
+      - name: "PFSECLO_1"
+        networks:
+          - name: "{{ wan_pg }}"
+          - name: "LAN_S1"
+          - name: "SRV_S1"
+          - name: "VSAN_S1"
+          - name: "CARP_S1"
+          - name: "VPN_S1"
+      - name: "PFSECLI_2"
+        networks:
+          - name: "{{ wan_pg }}"
+          - name: "LAN_S2"
+          - name: "SRV_S2"
+          - name: "VSAN_S2"
+          - name: "CARP_S2"
+          - name: "VPN_S2"
+      - name: "PFSECLO_2"
+        networks:
+          - name: "{{ wan_pg }}"
+          - name: "LAN_S2"
+          - name: "SRV_S2"
+          - name: "VSAN_S2"
+          - name: "CARP_S2"
+          - name: "VPN_S2"
+      - name: "PFSE_STK"
+        networks:
+          - name: "{{ wan_pg }}"
+          - name: "{{ lan_pg }}"
+
+  tasks:
+    # Création des portgroups
+     - name: Créer les portgroups (sauf WAN)
+       community.vmware.vmware_portgroup:
+         hostname:        "{{ esxi_hostname }}"
+         username:        "{{ esxi_username }}"
+         password:        "{{ esxi_password }}"
+         validate_certs:  "{{ validate_certs }}"
+         switch_name:     "{{ default_vswitch }}"
+         portgroup_name:  "{{ item.name }}"
+         vlan_id:         "{{ item.vlan_id }}"
+         hosts:           ["{{ esxi_hostname }}"]
+         state:           present
+       loop: "{{ portgroups }}"
+       delegate_to: localhost
+
+    - name: Déployer les pfSense depuis l’ISO avec 4 vCPU, 8 Go RAM et stockage thin 20 Go
+      community.vmware.vmware_guest:
+        folder:             "/"               # dossier racine sur ESXi
+        hostname:           "{{ esxi_hostname }}"
+        username:           "{{ esxi_username }}"
+        password:           "{{ esxi_password }}"
+        validate_certs:     "{{ validate_certs }}"
+        datastore:          "{{ datastore }}"
+        name:               "{{ item.name }}"
+        state:              present
+        guest_id:           "freebsd64Guest"
+        hardware:
+          hotadd_cpu:         yes
+          hotremove_cpu:      yes
+          hotadd_memory:      yes
+          num_cpus:         4
+          memory_mb:        8192
+        disk:
+          - size_gb:        20
+            datastore:      "{{ datastore }}"
+            type:            thin
+        cdrom:
+          type:             iso
+          iso_path:         "{{ pfsense_iso }}"
+        networks:           "{{ item.networks }}"
+      loop:               "{{ pf_vms }}"
+      delegate_to:       localhost
