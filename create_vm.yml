@@ -7,10 +7,8 @@
 
   vars:
     # Informations de connexion à l'hôte ESXi
-    esxi_hostname: "147.79.5.200"        # Adresse IP ou FQDN de votre ESXi
-    esxi_username: "ansible"   # À renseigner
-    esxi_password: "$S8DXZPq!hPUZH#n"    # À renseigner
     validate_certs: false
+    
 
     # Informations sur l'infrastructure ESXi
     datastore: "dstore-vms"               # Nom du datastore (les VMs seront créées à la racine)
